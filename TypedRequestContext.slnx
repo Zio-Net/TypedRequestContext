@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TypedRequestContext.Propagation/TypedRequestContext.Propagation.csproj" />
+    <Project Path="src/TypedRequestContext/TypedRequestContext.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TypedRequestContext.AspNetCore.IntegrationTests/TypedRequestContext.AspNetCore.IntegrationTests.csproj" />
+    <Project Path="tests/TypedRequestContext.Propagation.UnitTests/TypedRequestContext.Propagation.UnitTests.csproj" />
+    <Project Path="tests/TypedRequestContext.UnitTests/TypedRequestContext.UnitTests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <file Path="samples/.gitkeep" />
+  </Folder>
+</Solution>
