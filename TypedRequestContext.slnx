@@ -12,6 +12,6 @@
     <Project Path="tests/TypedRequestContext.UnitTests/TypedRequestContext.UnitTests.csproj" />
   </Folder>
   <Folder Name="/samples/">
-    <file Path="samples/.gitkeep" />
+    <File Path="samples/.gitkeep" />
   </Folder>
 </Solution>

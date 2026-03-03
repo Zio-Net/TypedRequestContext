@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Globalization;
 using TypedRequestContext;
 using TypedRequestContext.Propagation;
 
@@ -10,7 +11,7 @@ namespace TypedRequestContext.Propagation.Infrastructure;
 /// </summary>
 /// <remarks>
 /// Properties without <see cref="PropagationKeyAttribute"/> are not serialized — they remain local
-/// to the manager. Properties with a null/default value at runtime are omitted.
+/// to the manager. Properties with a <see langword="null"/> value at runtime are omitted.
 /// Reflection cost is paid once per context type at class initialization.
 /// </remarks>
 /// <typeparam name="T">The typed request context to serialize.</typeparam>
@@ -33,7 +34,9 @@ public sealed class AttributeBasedRequestContextSerializer<T> : IRequestContextS
         {
             var value = property.GetValue(context);
             if (value is not null)
-                result[headerName] = value.ToString()!;
+                result[headerName] = value is IFormattable formattable
+                    ? formattable.ToString(format: null, CultureInfo.InvariantCulture)
+                    : value.ToString()!;
         }
 
         return result;

@@ -11,18 +11,27 @@ namespace TypedRequestContext.Infrastructure;
 /// </summary>
 internal sealed class PropertyMapper
 {
+    private enum ContextValueSource
+    {
+        Claim,
+        Header
+    }
+
     private readonly PropertyInfo _property;
     private readonly Func<HttpContext, string?> _extract;
     private readonly bool _required;
+    private readonly ContextValueSource _source;
 
     private PropertyMapper(
         PropertyInfo property,
         Func<HttpContext, string?> extract,
-        bool required)
+        bool required,
+        ContextValueSource source)
     {
         _property = property;
         _extract = extract;
         _required = required;
+        _source = source;
     }
 
     /// <summary>
@@ -33,6 +42,12 @@ internal sealed class PropertyMapper
     {
         var fromClaim = property.GetCustomAttribute<FromClaimAttribute>();
         var fromHeader = property.GetCustomAttribute<FromHeaderAttribute>();
+
+        if (fromClaim is not null && fromHeader is not null)
+        {
+            throw new InvalidOperationException(
+                $"Property '{property.Name}' on '{property.DeclaringType?.Name}' cannot have both {nameof(FromClaimAttribute)} and {nameof(FromHeaderAttribute)}.");
+        }
 
         if (fromClaim is null && fromHeader is null)
             return null;
@@ -45,7 +60,9 @@ internal sealed class PropertyMapper
                 ? val.FirstOrDefault()
                 : null;
 
-        return new PropertyMapper(property, extract, required);
+        var source = fromClaim is not null ? ContextValueSource.Claim : ContextValueSource.Header;
+
+        return new PropertyMapper(property, extract, required, source);
     }
 
     /// <summary>
@@ -62,8 +79,7 @@ internal sealed class PropertyMapper
         {
             if (_required)
             {
-                var isClaim = _property.GetCustomAttribute<FromClaimAttribute>() is not null;
-                return isClaim
+                return _source == ContextValueSource.Claim
                     ? PropertyMapperResult.MissingClaim(_property.Name)
                     : PropertyMapperResult.MissingHeader(_property.Name);
             }
@@ -76,8 +92,7 @@ internal sealed class PropertyMapper
         {
             if (_required)
             {
-                var isClaim = _property.GetCustomAttribute<FromClaimAttribute>() is not null;
-                return isClaim
+                return _source == ContextValueSource.Claim
                     ? PropertyMapperResult.InvalidClaim(_property.Name)
                     : PropertyMapperResult.InvalidHeader(_property.Name);
             }
@@ -129,19 +144,19 @@ internal readonly record struct PropertyMapperResult
 
     /// <summary>A required claim was missing — should return 401.</summary>
     public static PropertyMapperResult MissingClaim(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName };
+        => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Missing };
 
     /// <summary>A required header was missing — should return 403.</summary>
     public static PropertyMapperResult MissingHeader(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName };
+        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Missing };
 
     /// <summary>A required claim exists but has invalid format — should return 401.</summary>
     public static PropertyMapperResult InvalidClaim(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName };
+        => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Invalid };
 
     /// <summary>A required header exists but has invalid format — should return 403.</summary>
     public static PropertyMapperResult InvalidHeader(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName };
+        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Invalid };
 
     /// <summary>Whether the extraction succeeded.</summary>
     public bool IsSuccess { get; init; }
@@ -151,4 +166,13 @@ internal readonly record struct PropertyMapperResult
 
     /// <summary>The name of the property that failed extraction.</summary>
     public string? PropertyName { get; init; }
+
+    /// <summary>Whether the value was missing or invalid.</summary>
+    public RequestContextFailureKind FailureKind { get; init; }
+}
+
+internal enum RequestContextFailureKind
+{
+    Missing,
+    Invalid
 }

@@ -13,16 +13,30 @@ public sealed class AttributeBasedRequestContextDeserializer<T> : IRequestContex
     where T : class, ITypedRequestContext
 {
     private static readonly PropagationKeyMapper[] _mappers = BuildMappers();
+    private static readonly Func<T> _factory = BuildFactory();
 
     /// <inheritdoc />
     public T Deserialize(IReadOnlyDictionary<string, string> metadata)
     {
-        var instance = Activator.CreateInstance<T>();
+        var instance = _factory();
 
         foreach (var mapper in _mappers)
             mapper.Apply(instance, metadata);
 
         return instance;
+    }
+
+    private static Func<T> BuildFactory()
+    {
+        var ctor = typeof(T).GetConstructor(Type.EmptyTypes);
+        if (ctor is null || !ctor.IsPublic)
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' must have a public parameterless constructor when using '{nameof(AttributeBasedRequestContextDeserializer<T>)}'. " +
+                $"Provide one, or register a custom deserializer via AddTypedRequestContext<{typeof(T).Name}>(b => b.UseDeserializer<...>()).");
+        }
+
+        return Activator.CreateInstance<T>;
     }
 
     private static PropagationKeyMapper[] BuildMappers()

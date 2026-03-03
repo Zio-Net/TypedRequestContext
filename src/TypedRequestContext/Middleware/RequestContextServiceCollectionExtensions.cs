@@ -58,7 +58,7 @@ public static class RequestContextServiceCollectionExtensions
         configure?.Invoke(builder);
 
         if (builder.ExtractorType is not null)
-            services.AddSingleton(typeof(IRequestContextExtractor<TContext>), builder.ExtractorType);
+            services.AddTransient(typeof(IRequestContextExtractor<TContext>), builder.ExtractorType);
 
         services.AddScoped<TContext>(sp =>
             sp.GetRequiredService<IRequestContextAccessor>()
@@ -107,7 +107,7 @@ public static class RequestContextServiceCollectionExtensions
         {
             var extractorDelegate = buildExtractorMethod
                 .MakeGenericMethod(contextType)
-                .Invoke(null, [app.ApplicationServices]);
+                .Invoke(null, null);
             extractors[contextType] = (Func<HttpContext, ITypedRequestContext>)extractorDelegate!;
         }
 
@@ -127,12 +127,13 @@ public static class RequestContextServiceCollectionExtensions
     public static IApplicationBuilder UseRequestContext(this IApplicationBuilder app)
         => app.UseTypedRequestContext();
 
-    private static Func<HttpContext, ITypedRequestContext> BuildExtractorDelegate<TContext>(
-        IServiceProvider serviceProvider)
+    private static Func<HttpContext, ITypedRequestContext> BuildExtractorDelegate<TContext>()
         where TContext : class, ITypedRequestContext
     {
-        var extractor = serviceProvider.GetRequiredService<IRequestContextExtractor<TContext>>();
-        return extractor.Extract;
+        return httpContext =>
+            httpContext.RequestServices
+                .GetRequiredService<IRequestContextExtractor<TContext>>()
+                .Extract(httpContext);
     }
 }
 

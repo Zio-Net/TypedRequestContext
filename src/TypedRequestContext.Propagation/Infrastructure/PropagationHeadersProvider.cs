@@ -1,8 +1,6 @@
 using System.Reflection;
-using TypedRequestContext;
-using TypedRequestContext.Propagation;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace TypedRequestContext.Propagation.Infrastructure;
 
@@ -16,19 +14,22 @@ internal sealed class PropagationHeadersProvider : IPropagationHeadersProvider
 {
     private readonly IRequestContextAccessor _contextAccessor;
     private readonly ICorrelationContext? _correlationContext;
-    private readonly Lazy<Dictionary<Type, Func<ITypedRequestContext, IReadOnlyDictionary<string, string>>>> _serializers;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly Lazy<Dictionary<Type, SerializerRegistration>> _serializerRegistrations;
+    private static readonly ConcurrentDictionary<Type, Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>> _invokerCache = new();
 
     public PropagationHeadersProvider(
         IRequestContextAccessor contextAccessor,
         IOptions<RequestContextOptions> options,
-        IServiceProvider serviceProvider,
+        IServiceScopeFactory scopeFactory,
         ICorrelationContext? correlationContext = null)
     {
         _contextAccessor = contextAccessor;
         _correlationContext = correlationContext;
+        _scopeFactory = scopeFactory;
 
-        _serializers = new Lazy<Dictionary<Type, Func<ITypedRequestContext, IReadOnlyDictionary<string, string>>>>(
-            () => BuildSerializerMap(options.Value, serviceProvider));
+        _serializerRegistrations = new Lazy<Dictionary<Type, SerializerRegistration>>(
+            () => BuildSerializerMap(options.Value));
     }
 
     /// <inheritdoc />
@@ -40,51 +41,56 @@ internal sealed class PropagationHeadersProvider : IPropagationHeadersProvider
             headers["x-correlation-id"] = _correlationContext.CorrelationId;
 
         var context = _contextAccessor.Current;
-        if (context is not null && _serializers.Value.TryGetValue(context.GetType(), out var serialize))
+        if (context is not null && _serializerRegistrations.Value.TryGetValue(context.GetType(), out var registration))
         {
-            foreach (var (key, value) in serialize(context))
+            using var scope = _scopeFactory.CreateScope();
+            var serializer = registration.Resolve(scope.ServiceProvider);
+            var serialize = _invokerCache.GetOrAdd(context.GetType(), CreateInvoker);
+
+            foreach (var (key, value) in serialize(serializer, context))
                 headers[key] = value;
         }
 
         return headers;
     }
 
-    private static Dictionary<Type, Func<ITypedRequestContext, IReadOnlyDictionary<string, string>>> BuildSerializerMap(
-        RequestContextOptions options,
-        IServiceProvider serviceProvider)
+    private static Dictionary<Type, SerializerRegistration> BuildSerializerMap(
+        RequestContextOptions options)
     {
-        var map = new Dictionary<Type, Func<ITypedRequestContext, IReadOnlyDictionary<string, string>>>();
+        var map = new Dictionary<Type, SerializerRegistration>();
 
         foreach (var contextType in options.ContextTypes)
         {
-            object serializer;
             if (options.SerializerTypes.TryGetValue(contextType, out var customSerializerType))
             {
-                serializer = ActivatorUtilities.CreateInstance(serviceProvider, customSerializerType);
+                map[contextType] = new SerializerRegistration(
+                    serviceProvider => ActivatorUtilities.CreateInstance(serviceProvider, customSerializerType));
             }
             else
             {
                 var serializerType = typeof(IRequestContextSerializer<>).MakeGenericType(contextType);
-                serializer = serviceProvider.GetRequiredService(serializerType);
+                map[contextType] = new SerializerRegistration(
+                    serviceProvider => serviceProvider.GetRequiredService(serializerType));
             }
-
-            var serializeMethod = typeof(PropagationHeadersProvider)
-                .GetMethod(nameof(CreateDelegate), BindingFlags.NonPublic | BindingFlags.Static)!
-                .MakeGenericMethod(contextType);
-
-            var del = (Func<ITypedRequestContext, IReadOnlyDictionary<string, string>>)
-                serializeMethod.Invoke(null, [serializer])!;
-
-            map[contextType] = del;
         }
 
         return map;
     }
 
-    private static Func<ITypedRequestContext, IReadOnlyDictionary<string, string>> CreateDelegate<T>(
-        IRequestContextSerializer<T> serializer)
+    private static Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>> CreateInvoker(Type contextType)
+    {
+        var createMethod = typeof(PropagationHeadersProvider)
+            .GetMethod(nameof(CreateInvokerGeneric), BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(contextType);
+
+        return (Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>)createMethod.Invoke(null, null)!;
+    }
+
+    private static Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>> CreateInvokerGeneric<T>()
         where T : class, ITypedRequestContext
     {
-        return context => serializer.Serialize((T)context);
+        return (serializer, context) => ((IRequestContextSerializer<T>)serializer).Serialize((T)context);
     }
+
+    private sealed record SerializerRegistration(Func<IServiceProvider, object> Resolve);
 }
