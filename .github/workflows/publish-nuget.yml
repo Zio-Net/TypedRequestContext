@@ -1,0 +1,66 @@
+name: Publish NuGet Packages
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+      - name: Detect version changes
+        id: version-check
+        run: |
+          check_version_change() {
+            local file="$1"
+            local output_name="$2"
+            if git diff HEAD~1 HEAD -- "$file" | grep -q '<Version>'; then
+              echo "${output_name}=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${output_name}=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+
+          check_version_change "src/TypedRequestContext/TypedRequestContext.csproj" "core_changed"
+          check_version_change "src/TypedRequestContext.Propagation/TypedRequestContext.Propagation.csproj" "propagation_changed"
+
+      - name: Pack & Push TypedRequestContext
+        if: steps.version-check.outputs.core_changed == 'true'
+        run: |
+          dotnet pack src/TypedRequestContext/TypedRequestContext.csproj -c Release --no-build -o ./nupkgs
+          dotnet nuget push ./nupkgs/TypedRequestContext.*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Pack & Push TypedRequestContext.Propagation
+        if: steps.version-check.outputs.propagation_changed == 'true'
+        run: |
+          dotnet pack src/TypedRequestContext.Propagation/TypedRequestContext.Propagation.csproj -c Release --no-build -o ./nupkgs
+          dotnet nuget push ./nupkgs/TypedRequestContext.Propagation.*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
