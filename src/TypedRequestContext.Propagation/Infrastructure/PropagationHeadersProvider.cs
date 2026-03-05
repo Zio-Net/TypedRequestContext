@@ -10,27 +10,18 @@ namespace TypedRequestContext.Propagation.Infrastructure;
 /// resolves the correct serializer via a lazily-built delegate map,
 /// and serializes on the spot — no eager pre-serialization, no second AsyncLocal.
 /// </summary>
-internal sealed class PropagationHeadersProvider : IPropagationHeadersProvider
+internal sealed class PropagationHeadersProvider(
+    IRequestContextAccessor contextAccessor,
+    IOptions<RequestContextOptions> options,
+    IServiceScopeFactory scopeFactory,
+    ICorrelationContext? correlationContext = null) : IPropagationHeadersProvider
 {
-    private readonly IRequestContextAccessor _contextAccessor;
-    private readonly ICorrelationContext? _correlationContext;
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Lazy<Dictionary<Type, SerializerRegistration>> _serializerRegistrations;
-    private static readonly ConcurrentDictionary<Type, Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>> _invokerCache = new();
-
-    public PropagationHeadersProvider(
-        IRequestContextAccessor contextAccessor,
-        IOptions<RequestContextOptions> options,
-        IServiceScopeFactory scopeFactory,
-        ICorrelationContext? correlationContext = null)
-    {
-        _contextAccessor = contextAccessor;
-        _correlationContext = correlationContext;
-        _scopeFactory = scopeFactory;
-
-        _serializerRegistrations = new Lazy<Dictionary<Type, SerializerRegistration>>(
+    private readonly IRequestContextAccessor _contextAccessor = contextAccessor;
+    private readonly ICorrelationContext? _correlationContext = correlationContext;
+    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
+    private readonly Lazy<Dictionary<Type, SerializerRegistration>> _serializerRegistrations = new(
             () => BuildSerializerMap(options.Value));
-    }
+    private static readonly ConcurrentDictionary<Type, Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>> _invokerCache = new();
 
     /// <inheritdoc />
     public IReadOnlyDictionary<string, string> GetCurrentHeaders()

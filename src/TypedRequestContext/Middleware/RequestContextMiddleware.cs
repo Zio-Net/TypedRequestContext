@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using TypedRequestContext;
 using TypedRequestContext.Infrastructure;
 
 namespace TypedRequestContext;
@@ -20,13 +19,13 @@ public sealed class RequestContextMiddleware(
     RequestDelegate next,
     Dictionary<Type, Func<HttpContext, ITypedRequestContext>> extractors,
     bool correlationEnabled,
-    IRequestContextAccessor requestContextAccessor,
+    RequestContextScopeFactory scopeFactory,
     ILogger<RequestContextMiddleware> logger)
 {
     private readonly RequestDelegate _next = next;
     private readonly Dictionary<Type, Func<HttpContext, ITypedRequestContext>> _extractors = extractors;
     private readonly bool _correlationEnabled = correlationEnabled;
-    private readonly IRequestContextAccessor _requestContextAccessor = requestContextAccessor;
+    private readonly RequestContextScopeFactory _scopeFactory = scopeFactory;
     private readonly ILogger<RequestContextMiddleware> _logger = logger;
 
     /// <summary>
@@ -71,8 +70,8 @@ public sealed class RequestContextMiddleware(
             // Invoke the pre-built extractor delegate to create the typed context
             var requestContext = extract(httpContext);
 
-            // Store in typed accessor — serialization happens lazily via IPropagationHeadersProvider
-            _requestContextAccessor.Current = requestContext;
+            // Store in typed accessor via scope — automatically cleared on dispose
+            using var scope = _scopeFactory.Begin(requestContext);
 
             _logger.LogDebug(
                 "Request context set: Type={ContextType}",
@@ -91,8 +90,6 @@ public sealed class RequestContextMiddleware(
         }
         finally
         {
-            _requestContextAccessor.Current = null;
-
             if (_correlationEnabled)
                 CorrelationContext.Clear();
         }

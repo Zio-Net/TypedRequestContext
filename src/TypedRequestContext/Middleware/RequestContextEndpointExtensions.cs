@@ -1,4 +1,3 @@
-using TypedRequestContext;
 using TypedRequestContext.Infrastructure;
 
 namespace TypedRequestContext;

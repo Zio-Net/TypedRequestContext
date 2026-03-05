@@ -1,6 +1,4 @@
 using System.Reflection;
-using TypedRequestContext;
-using TypedRequestContext.Propagation;
 
 namespace TypedRequestContext.Propagation.Infrastructure;
 

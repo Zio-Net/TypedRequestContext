@@ -1,5 +1,4 @@
 using System.Reflection;
-using TypedRequestContext;
 using TypedRequestContext.Infrastructure;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +16,7 @@ public static class RequestContextServiceCollectionExtensions
     public static IServiceCollection AddTypedRequestContext(this IServiceCollection services)
     {
         services.AddSingleton<IRequestContextAccessor, RequestContextAccessor>();
+        services.AddSingleton<RequestContextScopeFactory>();
 
         services.AddSingleton(
             typeof(IRequestContextExtractor<>),

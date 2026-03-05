@@ -22,4 +22,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="TypedRequestContext.Propagation" />
+    <InternalsVisibleTo Include="TypedRequestContext.UnitTests" />
+  </ItemGroup>
+
 </Project>
