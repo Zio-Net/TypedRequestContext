@@ -24,6 +24,10 @@ public static class TypedRequestContextPropagationServiceCollectionExtensions
             typeof(IRequestContextSerializer<>),
             typeof(AttributeBasedRequestContextSerializer<>));
 
+        services.AddSingleton(
+            typeof(IRequestContextPropagator<>),
+            typeof(RequestContextPropagator<>));
+
         return services;
     }
 }

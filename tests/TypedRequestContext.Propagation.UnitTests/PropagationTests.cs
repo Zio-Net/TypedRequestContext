@@ -63,6 +63,111 @@ public class AttributeBasedRequestContextDeserializerTests
     }
 }
 
+public class RequestContextPropagatorTests
+{
+    [Fact]
+    public void Propagate_SetsContextOnAccessor()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>();
+
+        var provider = services.BuildServiceProvider();
+        var accessor = provider.GetRequiredService<IRequestContextAccessor>();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111",
+            ["x-tenant-id"] = "22222222-2222-2222-2222-222222222222"
+        };
+
+        using (propagator.Propagate(metadata))
+        {
+            var ctx = accessor.GetRequired<TestPropagationContext>();
+            Assert.Equal(Guid.Parse("11111111-1111-1111-1111-111111111111"), ctx.UserId);
+            Assert.Equal(Guid.Parse("22222222-2222-2222-2222-222222222222"), ctx.TenantId);
+        }
+    }
+
+    [Fact]
+    public void Propagate_ClearsContextFromAccessorAfterDispose()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>();
+
+        var provider = services.BuildServiceProvider();
+        var accessor = provider.GetRequiredService<IRequestContextAccessor>();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111",
+            ["x-tenant-id"] = "22222222-2222-2222-2222-222222222222"
+        };
+
+        using (propagator.Propagate(metadata))
+        {
+            Assert.NotNull(accessor.Current);
+        }
+
+        Assert.Null(accessor.Current);
+    }
+
+    [Fact]
+    public void Propagate_ClearsContextEvenWhenHandlerThrows()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>();
+
+        var provider = services.BuildServiceProvider();
+        var accessor = provider.GetRequiredService<IRequestContextAccessor>();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111",
+            ["x-tenant-id"] = "22222222-2222-2222-2222-222222222222"
+        };
+
+        try
+        {
+            using (propagator.Propagate(metadata))
+            {
+                throw new InvalidOperationException("handler failed");
+            }
+        }
+        catch (InvalidOperationException) { }
+
+        Assert.Null(accessor.Current);
+    }
+
+    [Fact]
+    public void Propagate_Throws_WhenRequiredMetadataIsMissing()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>();
+
+        var provider = services.BuildServiceProvider();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111"
+            // x-tenant-id missing — required
+        };
+
+        Assert.Throws<RequestContextDeserializationException>(() => propagator.Propagate(metadata));
+    }
+}
+
 public class PropagationHeadersProviderTests
 {
     [Fact]
