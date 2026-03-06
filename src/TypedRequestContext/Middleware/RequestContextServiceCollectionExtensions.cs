@@ -1,5 +1,6 @@
 using System.Reflection;
 using TypedRequestContext.Infrastructure;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace TypedRequestContext;
@@ -15,10 +16,10 @@ public static class RequestContextServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddTypedRequestContext(this IServiceCollection services)
     {
-        services.AddSingleton<IRequestContextAccessor, RequestContextAccessor>();
-        services.AddSingleton<RequestContextScopeFactory>();
+        services.TryAddSingleton<IRequestContextAccessor, RequestContextAccessor>();
+        services.TryAddSingleton<RequestContextScopeFactory>();
 
-        services.AddSingleton(
+        services.TryAddSingleton(
             typeof(IRequestContextExtractor<>),
             typeof(AttributeBasedRequestContextExtractor<>));
 
