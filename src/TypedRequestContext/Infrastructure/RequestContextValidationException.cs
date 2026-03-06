@@ -2,7 +2,7 @@ namespace TypedRequestContext.Infrastructure;
 
 /// <summary>
 /// Thrown when a typed request context fails validation.
-/// Contains structured validation errors grouped by member name.
+/// Contains the validation errors that caused the failure.
 /// </summary>
 public sealed class RequestContextValidationException(
     IReadOnlyList<RequestContextValidationError> errors)
