@@ -60,9 +60,16 @@ public static class RequestContextServiceCollectionExtensions
         if (builder.ExtractorType is not null)
             services.AddTransient(typeof(IRequestContextExtractor<TContext>), builder.ExtractorType);
 
-        services.AddScoped<TContext>(sp =>
+        services.AddScoped(sp =>
             sp.GetRequiredService<IRequestContextAccessor>()
               .GetRequired<TContext>());
+
+        if (builder.ValidationEnabled)
+        {
+            var validatorType = builder.ValidatorType
+                ?? typeof(DataAnnotationsRequestContextValidator<TContext>);
+            services.AddSingleton(typeof(IRequestContextValidator<TContext>), validatorType);
+        }
 
         services.Configure<RequestContextOptions>(opts =>
         {
@@ -73,6 +80,10 @@ public static class RequestContextServiceCollectionExtensions
 
             if (builder.DeserializerType is not null)
                 opts.DeserializerTypes[typeof(TContext)] = builder.DeserializerType;
+
+            if (builder.ValidationEnabled)
+                opts.ValidatorTypes[typeof(TContext)] = builder.ValidatorType
+                    ?? typeof(DataAnnotationsRequestContextValidator<TContext>);
         });
 
         return services;
@@ -111,6 +122,24 @@ public static class RequestContextServiceCollectionExtensions
             extractors[contextType] = (Func<HttpContext, ITypedRequestContext>)extractorDelegate!;
         }
 
+        // Build validator delegate map — one entry per context type with validation enabled.
+        var validators = new Dictionary<Type, Action<ITypedRequestContext>>();
+
+        var buildValidatorMethod = typeof(RequestContextServiceCollectionExtensions)
+            .GetMethod(nameof(BuildValidatorDelegate), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        foreach (var (contextType, _) in options.ValidatorTypes)
+        {
+            var validatorDelegate = buildValidatorMethod
+                .MakeGenericMethod(contextType)
+                .Invoke(null, [app.ApplicationServices]);
+            validators[contextType] = (Action<ITypedRequestContext>)validatorDelegate!;
+        }
+
+        // Configure the scope factory with validators
+        var scopeFactory = app.ApplicationServices.GetRequiredService<RequestContextScopeFactory>();
+        scopeFactory.SetValidators(validators);
+
         // Detect whether AddCorrelationId() was called
         var correlationEnabled = app.ApplicationServices
             .GetService<CorrelationContext>() is not null;
@@ -135,6 +164,18 @@ public static class RequestContextServiceCollectionExtensions
                 .GetRequiredService<IRequestContextExtractor<TContext>>()
                 .Extract(httpContext);
     }
+
+    private static Action<ITypedRequestContext> BuildValidatorDelegate<TContext>(IServiceProvider sp)
+        where TContext : class, ITypedRequestContext
+    {
+        var validator = sp.GetRequiredService<IRequestContextValidator<TContext>>();
+        return context =>
+        {
+            var errors = validator.Validate((TContext)context);
+            if (errors is { Count: > 0 })
+                throw new RequestContextValidationException(errors);
+        };
+    }
 }
 
 /// <summary>
@@ -157,4 +198,9 @@ public sealed class RequestContextOptions
     /// Optional context-type to deserializer-type mapping configured at registration time.
     /// </summary>
     public Dictionary<Type, Type> DeserializerTypes { get; } = [];
+
+    /// <summary>
+    /// Context-type to validator-type mapping for types with validation enabled.
+    /// </summary>
+    public Dictionary<Type, Type> ValidatorTypes { get; } = [];
 }

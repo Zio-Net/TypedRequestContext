@@ -79,6 +79,21 @@ public sealed class RequestContextMiddleware(
 
             await _next(httpContext);
         }
+        catch (RequestContextValidationException ex)
+        {
+            _logger.LogWarning(
+                "Request context validation failed: {ErrorCount} error(s)",
+                ex.Errors.Count);
+
+            httpContext.Response.StatusCode = 400;
+            await httpContext.Response.WriteAsJsonAsync(new
+            {
+                message = ex.Message,
+                errors = ex.Errors
+                    .GroupBy(e => e.MemberName ?? "$")
+                    .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray())
+            });
+        }
         catch (RequestContextCreationException ex)
         {
             _logger.LogWarning(
