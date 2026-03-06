@@ -1,5 +1,3 @@
-using TypedRequestContext;
-
 namespace TypedRequestContext.Propagation;
 
 /// <summary>

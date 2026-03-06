@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Reflection;
 using System.Security.Claims;
-using TypedRequestContext;
 
 namespace TypedRequestContext.Infrastructure;
 

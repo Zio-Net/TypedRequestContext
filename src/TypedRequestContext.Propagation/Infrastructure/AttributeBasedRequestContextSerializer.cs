@@ -1,7 +1,5 @@
 using System.Reflection;
 using System.Globalization;
-using TypedRequestContext;
-using TypedRequestContext.Propagation;
 
 namespace TypedRequestContext.Propagation.Infrastructure;
 

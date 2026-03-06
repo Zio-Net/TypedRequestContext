@@ -1,5 +1,4 @@
 using System.Reflection;
-using TypedRequestContext;
 using TypedRequestContext.Infrastructure;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +16,7 @@ public static class RequestContextServiceCollectionExtensions
     public static IServiceCollection AddTypedRequestContext(this IServiceCollection services)
     {
         services.AddSingleton<IRequestContextAccessor, RequestContextAccessor>();
+        services.AddSingleton<RequestContextScopeFactory>();
 
         services.AddSingleton(
             typeof(IRequestContextExtractor<>),
@@ -60,9 +60,16 @@ public static class RequestContextServiceCollectionExtensions
         if (builder.ExtractorType is not null)
             services.AddTransient(typeof(IRequestContextExtractor<TContext>), builder.ExtractorType);
 
-        services.AddScoped<TContext>(sp =>
+        services.AddScoped(sp =>
             sp.GetRequiredService<IRequestContextAccessor>()
               .GetRequired<TContext>());
+
+        if (builder.ValidationEnabled)
+        {
+            var validatorType = builder.ValidatorType
+                ?? typeof(DataAnnotationsRequestContextValidator<TContext>);
+            services.AddTransient(typeof(IRequestContextValidator<TContext>), validatorType);
+        }
 
         services.Configure<RequestContextOptions>(opts =>
         {
@@ -73,6 +80,10 @@ public static class RequestContextServiceCollectionExtensions
 
             if (builder.DeserializerType is not null)
                 opts.DeserializerTypes[typeof(TContext)] = builder.DeserializerType;
+
+            if (builder.ValidationEnabled)
+                opts.ValidatorTypes[typeof(TContext)] = builder.ValidatorType
+                    ?? typeof(DataAnnotationsRequestContextValidator<TContext>);
         });
 
         return services;
@@ -135,6 +146,7 @@ public static class RequestContextServiceCollectionExtensions
                 .GetRequiredService<IRequestContextExtractor<TContext>>()
                 .Extract(httpContext);
     }
+
 }
 
 /// <summary>
@@ -157,4 +169,9 @@ public sealed class RequestContextOptions
     /// Optional context-type to deserializer-type mapping configured at registration time.
     /// </summary>
     public Dictionary<Type, Type> DeserializerTypes { get; } = [];
+
+    /// <summary>
+    /// Context-type to validator-type mapping for types with validation enabled.
+    /// </summary>
+    public Dictionary<Type, Type> ValidatorTypes { get; } = [];
 }

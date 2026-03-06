@@ -1,5 +1,3 @@
-using TypedRequestContext;
-using TypedRequestContext.Propagation;
 using TypedRequestContext.Propagation.Infrastructure;
 
 namespace TypedRequestContext.Propagation;
@@ -23,6 +21,10 @@ public static class TypedRequestContextPropagationServiceCollectionExtensions
         services.AddSingleton(
             typeof(IRequestContextSerializer<>),
             typeof(AttributeBasedRequestContextSerializer<>));
+
+        services.AddSingleton(
+            typeof(IRequestContextPropagator<>),
+            typeof(RequestContextPropagator<>));
 
         return services;
     }

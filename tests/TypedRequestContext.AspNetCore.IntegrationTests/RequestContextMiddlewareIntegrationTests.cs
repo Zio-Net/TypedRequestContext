@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
@@ -335,4 +336,79 @@ public class RequestContextMiddlewareIntegrationTests
             };
         }
     }
+
+    [Fact]
+    public async Task ValidationFailure_Returns400_WithStructuredErrors()
+    {
+        await using var app = await BuildAppAsync(services =>
+        {
+            services.AddTypedRequestContext();
+            services.AddTypedRequestContext<ValidatedOrderContext>(b => b.EnableValidation());
+        }, app =>
+        {
+            app.MapGet("/order", (ValidatedOrderContext ctx) => Results.Ok(ctx.Code))
+                .WithRequestContext<ValidatedOrderContext>();
+        });
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/order");
+        request.Headers.Add("x-order-code", "TOOLONGVALUE");
+
+        var response = await app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<ValidationErrorPayload>();
+        Assert.NotNull(body);
+        Assert.Equal("Request context validation failed.", body.Message);
+        Assert.True(body.Errors.ContainsKey("Code"));
+    }
+
+    [Fact]
+    public async Task ValidationSuccess_ReturnsOk()
+    {
+        await using var app = await BuildAppAsync(services =>
+        {
+            services.AddTypedRequestContext();
+            services.AddTypedRequestContext<ValidatedOrderContext>(b => b.EnableValidation());
+        }, app =>
+        {
+            app.MapGet("/order", (ValidatedOrderContext ctx) => Results.Ok(ctx.Code))
+                .WithRequestContext<ValidatedOrderContext>();
+        });
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/order");
+        request.Headers.Add("x-order-code", "AB12");
+
+        var response = await app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task NoValidation_ExistingBehaviorUnchanged()
+    {
+        await using var app = await BuildAppAsync(services =>
+        {
+            services.AddTypedRequestContext();
+            services.AddTypedRequestContext<ValidatedOrderContext>(); // no validation configured
+        }, app =>
+        {
+            app.MapGet("/order", (ValidatedOrderContext ctx) => Results.Ok(ctx.Code))
+                .WithRequestContext<ValidatedOrderContext>();
+        });
+
+        var request = new HttpRequestMessage(HttpMethod.Get, "/order");
+        request.Headers.Add("x-order-code", "TOOLONGVALUE"); // would fail validation, but validation not enabled
+
+        var response = await app.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    public sealed class ValidatedOrderContext : ITypedRequestContext
+    {
+        [FromHeader("x-order-code"), MaxLength(4)]
+        public string? Code { get; init; }
+    }
+
+    private sealed record ValidationErrorPayload(string Message, Dictionary<string, string[]> Errors);
 }
