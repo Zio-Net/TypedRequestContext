@@ -83,7 +83,7 @@ public class RequestContextMiddlewareIntegrationTests
     }
 
     [Fact]
-    public async Task MissingRequiredHeader_Returns403()
+    public async Task MissingRequiredHeader_Returns400()
     {
         await using var app = await BuildAppAsync(services =>
         {
@@ -100,7 +100,7 @@ public class RequestContextMiddlewareIntegrationTests
 
         var response = await app.Client.SendAsync(request);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
         Assert.NotNull(body);
         Assert.Contains("TenantId", body["message"], StringComparison.Ordinal);

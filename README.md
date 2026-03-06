@@ -188,7 +188,7 @@ The default extractor uses cached reflection and the attributes on your context 
 If a `[RequiredContextValue]` property is missing:
 
 - For **claims**: the middleware returns **401**
-- For **headers**: the middleware returns **403**
+- For **headers**: the middleware returns **400**
 
 The response body is JSON:
 

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TypedRequestContext.Infrastructure;
 using TypedRequestContext.Propagation.Infrastructure;
 
 namespace TypedRequestContext.Propagation.UnitTests;
@@ -194,6 +195,68 @@ public class PropagationHeadersProviderTests
         Assert.Equal("22222222-2222-2222-2222-222222222222", headers["x-tenant-id"]);
         Assert.Equal("ops", headers["x-role"]);
         Assert.Equal("unknown", headers["x-correlation-id"]);
+    }
+}
+
+public class PropagationValidationTests
+{
+    [Fact]
+    public void Propagate_ThrowsValidationException_WhenValidationEnabledAndContextInvalid()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>(b =>
+            b.UseValidation<AlwaysFailPropagationValidator>());
+
+        var provider = services.BuildServiceProvider();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111",
+            ["x-tenant-id"] = "22222222-2222-2222-2222-222222222222"
+        };
+
+        Assert.Throws<RequestContextValidationException>(
+            () => propagator.Propagate(metadata));
+    }
+
+    [Fact]
+    public void Propagate_Succeeds_WhenValidationEnabledAndContextValid()
+    {
+        var services = new ServiceCollection();
+        services.AddTypedRequestContext();
+        services.AddTypedRequestContextPropagation();
+        services.AddTypedRequestContext<TestPropagationContext>(b =>
+            b.UseValidation<AlwaysPassPropagationValidator>());
+
+        var provider = services.BuildServiceProvider();
+        var accessor = provider.GetRequiredService<IRequestContextAccessor>();
+        var propagator = provider.GetRequiredService<IRequestContextPropagator<TestPropagationContext>>();
+
+        var metadata = new Dictionary<string, string>
+        {
+            ["x-user-id"] = "11111111-1111-1111-1111-111111111111",
+            ["x-tenant-id"] = "22222222-2222-2222-2222-222222222222"
+        };
+
+        using (propagator.Propagate(metadata))
+        {
+            var ctx = accessor.GetRequired<TestPropagationContext>();
+            Assert.Equal(Guid.Parse("11111111-1111-1111-1111-111111111111"), ctx.UserId);
+        }
+    }
+
+    private sealed class AlwaysFailPropagationValidator : IRequestContextValidator<TestPropagationContext>
+    {
+        public IReadOnlyList<RequestContextValidationError> Validate(TestPropagationContext context)
+            => [new RequestContextValidationError("UserId", "Invalid user")];
+    }
+
+    private sealed class AlwaysPassPropagationValidator : IRequestContextValidator<TestPropagationContext>
+    {
+        public IReadOnlyList<RequestContextValidationError> Validate(TestPropagationContext context) => [];
     }
 }
 
