@@ -121,16 +121,12 @@ public class RequestContextScopeFactoryValidationTests
     [Fact]
     public void Begin_ThrowsValidationException_WhenValidatorFails()
     {
-        var accessor = new RequestContextAccessor();
-        var factory = new RequestContextScopeFactory(accessor);
-        factory.SetValidators(new Dictionary<Type, Action<ITypedRequestContext>>
-        {
-            [typeof(FailingContext)] = _ =>
-                throw new RequestContextValidationException(
-                    [new RequestContextValidationError("Prop", "bad value")])
-        });
+        var sp = BuildProvider(b => b.AddTypedRequestContext<InvalidContext>(
+            cfg => cfg.UseValidation<AlwaysFailValidator>()));
 
-        var context = new FailingContext();
+        var factory = sp.GetRequiredService<RequestContextScopeFactory>();
+        var accessor = sp.GetRequiredService<IRequestContextAccessor>();
+        var context = new InvalidContext();
 
         Assert.Throws<RequestContextValidationException>(() => factory.Begin(context));
         Assert.Null(accessor.Current);
@@ -139,10 +135,12 @@ public class RequestContextScopeFactoryValidationTests
     [Fact]
     public void Begin_SetsContext_WhenNoValidatorRegistered()
     {
-        var accessor = new RequestContextAccessor();
-        var factory = new RequestContextScopeFactory(accessor);
+        var sp = BuildProvider(b => b.AddTypedRequestContext<InvalidContext>());
 
-        var context = new FailingContext();
+        var factory = sp.GetRequiredService<RequestContextScopeFactory>();
+        var accessor = sp.GetRequiredService<IRequestContextAccessor>();
+        var context = new InvalidContext();
+
         using var scope = factory.Begin(context);
 
         Assert.Same(context, accessor.Current);
@@ -151,20 +149,61 @@ public class RequestContextScopeFactoryValidationTests
     [Fact]
     public void Begin_SetsContext_WhenValidatorPasses()
     {
-        var accessor = new RequestContextAccessor();
-        var factory = new RequestContextScopeFactory(accessor);
-        factory.SetValidators(new Dictionary<Type, Action<ITypedRequestContext>>
-        {
-            [typeof(FailingContext)] = _ => { } // no-op = passes
-        });
+        var sp = BuildProvider(b => b.AddTypedRequestContext<InvalidContext>(
+            cfg => cfg.UseValidation<AlwaysPassValidator>()));
 
-        var context = new FailingContext();
+        var factory = sp.GetRequiredService<RequestContextScopeFactory>();
+        var accessor = sp.GetRequiredService<IRequestContextAccessor>();
+        var context = new InvalidContext();
+
         using var scope = factory.Begin(context);
 
         Assert.Same(context, accessor.Current);
     }
 
-    public sealed class FailingContext : ITypedRequestContext;
+    [Fact]
+    public void Begin_RestoresPreviousContext_OnNestedScopeDispose()
+    {
+        var sp = BuildProvider(b => b.AddTypedRequestContext<InvalidContext>());
+
+        var factory = sp.GetRequiredService<RequestContextScopeFactory>();
+        var accessor = sp.GetRequiredService<IRequestContextAccessor>();
+
+        var outer = new InvalidContext();
+        var inner = new InvalidContext();
+
+        using var outerScope = factory.Begin(outer);
+        Assert.Same(outer, accessor.Current);
+
+        using (var innerScope = factory.Begin(inner))
+        {
+            Assert.Same(inner, accessor.Current);
+        }
+
+        Assert.Same(outer, accessor.Current);
+    }
+
+    private static ServiceProvider BuildProvider(Action<IServiceCollection> configure)
+    {
+        var services = new ServiceCollection();
+        services.AddOptions();
+        services.AddTypedRequestContext();
+        configure(services);
+        return services.BuildServiceProvider();
+    }
+
+    public sealed class InvalidContext : ITypedRequestContext;
+
+    public sealed class AlwaysFailValidator : IRequestContextValidator<InvalidContext>
+    {
+        public IReadOnlyList<RequestContextValidationError> Validate(InvalidContext context)
+            => [new RequestContextValidationError("Prop", "bad value")];
+    }
+
+    public sealed class AlwaysPassValidator : IRequestContextValidator<InvalidContext>
+    {
+        public IReadOnlyList<RequestContextValidationError> Validate(InvalidContext context) => [];
+    }
 }
 
 public class RequestContextValidationRegistrationTests

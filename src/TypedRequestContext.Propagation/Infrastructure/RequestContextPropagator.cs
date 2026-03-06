@@ -16,11 +16,17 @@ public sealed class RequestContextPropagator<T>(
     RequestContextScopeFactory scopeFactory) : IRequestContextPropagator<T>
     where T : class, ITypedRequestContext
 {
-
     /// <inheritdoc />
     public IDisposable Propagate(IReadOnlyDictionary<string, string> metadata)
     {
         var context = deserializer.Deserialize(metadata);
         return scopeFactory.Begin(context);
+    }
+
+    /// <inheritdoc />
+    public IDisposable Propagate(IReadOnlyDictionary<string, string> metadata, IServiceProvider serviceProvider)
+    {
+        var context = deserializer.Deserialize(metadata);
+        return scopeFactory.Begin(context, serviceProvider);
     }
 }

@@ -70,8 +70,9 @@ public sealed class RequestContextMiddleware(
             // Invoke the pre-built extractor delegate to create the typed context
             var requestContext = extract(httpContext);
 
-            // Store in typed accessor via scope — automatically cleared on dispose
-            using var scope = _scopeFactory.Begin(requestContext);
+            // Store in typed accessor via scope — automatically cleared on dispose.
+            // Pass request-scoped provider so validators can use scoped dependencies.
+            using var scope = _scopeFactory.Begin(requestContext, httpContext.RequestServices);
 
             _logger.LogDebug(
                 "Request context set: Type={ContextType}",

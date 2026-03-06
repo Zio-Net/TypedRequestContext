@@ -68,7 +68,7 @@ public static class RequestContextServiceCollectionExtensions
         {
             var validatorType = builder.ValidatorType
                 ?? typeof(DataAnnotationsRequestContextValidator<TContext>);
-            services.AddSingleton(typeof(IRequestContextValidator<TContext>), validatorType);
+            services.AddTransient(typeof(IRequestContextValidator<TContext>), validatorType);
         }
 
         services.Configure<RequestContextOptions>(opts =>
@@ -122,24 +122,6 @@ public static class RequestContextServiceCollectionExtensions
             extractors[contextType] = (Func<HttpContext, ITypedRequestContext>)extractorDelegate!;
         }
 
-        // Build validator delegate map — one entry per context type with validation enabled.
-        var validators = new Dictionary<Type, Action<ITypedRequestContext>>();
-
-        var buildValidatorMethod = typeof(RequestContextServiceCollectionExtensions)
-            .GetMethod(nameof(BuildValidatorDelegate), BindingFlags.NonPublic | BindingFlags.Static)!;
-
-        foreach (var (contextType, _) in options.ValidatorTypes)
-        {
-            var validatorDelegate = buildValidatorMethod
-                .MakeGenericMethod(contextType)
-                .Invoke(null, [app.ApplicationServices]);
-            validators[contextType] = (Action<ITypedRequestContext>)validatorDelegate!;
-        }
-
-        // Configure the scope factory with validators
-        var scopeFactory = app.ApplicationServices.GetRequiredService<RequestContextScopeFactory>();
-        scopeFactory.SetValidators(validators);
-
         // Detect whether AddCorrelationId() was called
         var correlationEnabled = app.ApplicationServices
             .GetService<CorrelationContext>() is not null;
@@ -165,17 +147,6 @@ public static class RequestContextServiceCollectionExtensions
                 .Extract(httpContext);
     }
 
-    private static Action<ITypedRequestContext> BuildValidatorDelegate<TContext>(IServiceProvider sp)
-        where TContext : class, ITypedRequestContext
-    {
-        var validator = sp.GetRequiredService<IRequestContextValidator<TContext>>();
-        return context =>
-        {
-            var errors = validator.Validate((TContext)context);
-            if (errors is { Count: > 0 })
-                throw new RequestContextValidationException(errors);
-        };
-    }
 }
 
 /// <summary>
