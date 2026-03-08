@@ -13,14 +13,13 @@ namespace TypedRequestContext.Propagation.Infrastructure;
 internal sealed class PropagationHeadersProvider(
     IRequestContextAccessor contextAccessor,
     IOptions<RequestContextOptions> options,
+    IServiceProvider rootProvider,
     IServiceScopeFactory scopeFactory,
     ICorrelationContext? correlationContext = null) : IPropagationHeadersProvider
 {
-    private readonly IRequestContextAccessor _contextAccessor = contextAccessor;
-    private readonly ICorrelationContext? _correlationContext = correlationContext;
-    private readonly IServiceScopeFactory _scopeFactory = scopeFactory;
     private readonly Lazy<Dictionary<Type, SerializerRegistration>> _serializerRegistrations = new(
             () => BuildSerializerMap(options.Value));
+    private readonly ConcurrentDictionary<Type, Lazy<object>> _singletonSerializerCache = new();
     private static readonly ConcurrentDictionary<Type, Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>> _invokerCache = new();
 
     /// <inheritdoc />
@@ -28,21 +27,42 @@ internal sealed class PropagationHeadersProvider(
     {
         var headers = new Dictionary<string, string>();
 
-        if (_correlationContext is not null)
-            headers["x-correlation-id"] = _correlationContext.CorrelationId;
+        if (correlationContext is not null)
+            headers["x-correlation-id"] = correlationContext.CorrelationId;
 
-        var context = _contextAccessor.Current;
+        var context = contextAccessor.Current;
         if (context is not null && _serializerRegistrations.Value.TryGetValue(context.GetType(), out var registration))
         {
-            using var scope = _scopeFactory.CreateScope();
-            var serializer = registration.Resolve(scope.ServiceProvider);
+            using var scope = ResolveSerializer(context.GetType(), registration);
             var serialize = _invokerCache.GetOrAdd(context.GetType(), CreateInvoker);
 
-            foreach (var (key, value) in serialize(serializer, context))
+            foreach (var (key, value) in serialize(scope.Serializer, context))
                 headers[key] = value;
         }
 
         return headers;
+    }
+
+    private SerializerScope ResolveSerializer(Type contextType, SerializerRegistration registration)
+    {
+        if (registration.IsSingleton)
+        {
+            var lazy = _singletonSerializerCache.GetOrAdd(contextType,
+                _ => new Lazy<object>(
+                    () => registration.Resolve(rootProvider),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+            return new SerializerScope(lazy.Value, scope: null);
+        }
+
+        // Custom serializers may have scoped dependencies — keep scope alive for serialization
+        var scope = scopeFactory.CreateScope();
+        return new SerializerScope(registration.Resolve(scope.ServiceProvider), scope);
+    }
+
+    private readonly struct SerializerScope(object serializer, IServiceScope? scope) : IDisposable
+    {
+        public object Serializer { get; } = serializer;
+        public void Dispose() => scope?.Dispose();
     }
 
     private static Dictionary<Type, SerializerRegistration> BuildSerializerMap(
@@ -55,13 +75,15 @@ internal sealed class PropagationHeadersProvider(
             if (options.SerializerTypes.TryGetValue(contextType, out var customSerializerType))
             {
                 map[contextType] = new SerializerRegistration(
-                    serviceProvider => ActivatorUtilities.CreateInstance(serviceProvider, customSerializerType));
+                    serviceProvider => ActivatorUtilities.CreateInstance(serviceProvider, customSerializerType),
+                    IsSingleton: false);
             }
             else
             {
                 var serializerType = typeof(IRequestContextSerializer<>).MakeGenericType(contextType);
                 map[contextType] = new SerializerRegistration(
-                    serviceProvider => serviceProvider.GetRequiredService(serializerType));
+                    serviceProvider => serviceProvider.GetRequiredService(serializerType),
+                    IsSingleton: true);
             }
         }
 
@@ -83,5 +105,5 @@ internal sealed class PropagationHeadersProvider(
         return (serializer, context) => ((IRequestContextSerializer<T>)serializer).Serialize((T)context);
     }
 
-    private sealed record SerializerRegistration(Func<IServiceProvider, object> Resolve);
+    private sealed record SerializerRegistration(Func<IServiceProvider, object> Resolve, bool IsSingleton);
 }

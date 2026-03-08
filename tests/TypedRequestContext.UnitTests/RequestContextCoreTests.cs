@@ -82,7 +82,7 @@ public class AttributeBasedRequestContextExtractorTests
     }
 
     [Fact]
-    public void Extract_Throws403_WhenRequiredHeaderIsMissing()
+    public void Extract_Throws400_WhenRequiredHeaderIsMissing()
     {
         var userId = Guid.NewGuid();
         var http = BuildHttpContext(
@@ -93,7 +93,7 @@ public class AttributeBasedRequestContextExtractorTests
 
         var ex = Assert.Throws<RequestContextCreationException>(() => extractor.Extract(http));
 
-        Assert.Equal(403, ex.StatusCode);
+        Assert.Equal(400, ex.StatusCode);
         Assert.Contains("TenantId", ex.Message, StringComparison.Ordinal);
     }
 

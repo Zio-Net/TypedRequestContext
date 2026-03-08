@@ -1,5 +1,6 @@
 using System.Reflection;
 using TypedRequestContext.Infrastructure;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace TypedRequestContext;
@@ -15,21 +16,15 @@ public static class RequestContextServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddTypedRequestContext(this IServiceCollection services)
     {
-        services.AddSingleton<IRequestContextAccessor, RequestContextAccessor>();
-        services.AddSingleton<RequestContextScopeFactory>();
+        services.TryAddSingleton<IRequestContextAccessor, RequestContextAccessor>();
+        services.TryAddSingleton<RequestContextScopeFactory>();
 
-        services.AddSingleton(
+        services.TryAddSingleton(
             typeof(IRequestContextExtractor<>),
             typeof(AttributeBasedRequestContextExtractor<>));
 
         return services;
     }
-
-    /// <summary>
-    /// Backward-compatible alias for <see cref="AddTypedRequestContext(IServiceCollection)"/>.
-    /// </summary>
-    public static IServiceCollection AddRequestContextFramework(this IServiceCollection services)
-        => services.AddTypedRequestContext();
 
     /// <summary>
     /// Registers the always-on CorrelationId module. Once registered, CorrelationId flows
@@ -47,7 +42,7 @@ public static class RequestContextServiceCollectionExtensions
     /// <summary>
     /// Registers a typed request context with optional custom extractor/serializer via fluent builder.
     /// Also registers a scoped DI shortcut so handlers can inject <typeparamref name="TContext"/> directly.
-    /// Tracks the context type so <see cref="UseRequestContext"/> can build delegate maps at startup.
+    /// Tracks the context type so <see cref="UseTypedRequestContext"/> can build delegate maps at startup.
     /// </summary>
     public static IServiceCollection AddTypedRequestContext<TContext>(
         this IServiceCollection services,
@@ -90,15 +85,6 @@ public static class RequestContextServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Backward-compatible alias for <see cref="AddTypedRequestContext{TContext}(IServiceCollection, Action{RequestContextBuilder{TContext}}?)"/>.
-    /// </summary>
-    public static IServiceCollection AddRequestContext<TContext>(
-        this IServiceCollection services,
-        Action<RequestContextBuilder<TContext>>? configure = null)
-        where TContext : class, ITypedRequestContext
-        => services.AddTypedRequestContext(configure);
-
-    /// <summary>
     /// Builds the internal extractor delegate map, detects correlation registration, and adds the middleware.
     /// Must be called AFTER <c>UseAuthentication()</c> and <c>UseAuthorization()</c>.
     /// </summary>
@@ -132,12 +118,6 @@ public static class RequestContextServiceCollectionExtensions
         return app;
     }
 
-    /// <summary>
-    /// Backward-compatible alias for <see cref="UseTypedRequestContext(IApplicationBuilder)"/>.
-    /// </summary>
-    public static IApplicationBuilder UseRequestContext(this IApplicationBuilder app)
-        => app.UseTypedRequestContext();
-
     private static Func<HttpContext, ITypedRequestContext> BuildExtractorDelegate<TContext>()
         where TContext : class, ITypedRequestContext
     {
@@ -151,7 +131,7 @@ public static class RequestContextServiceCollectionExtensions
 
 /// <summary>
 /// Options tracking which context types have been registered via
-/// <see cref="RequestContextServiceCollectionExtensions.AddRequestContext{TContext}"/>.
+/// <see cref="RequestContextServiceCollectionExtensions.AddTypedRequestContext{TContext}"/>.
 /// </summary>
 public sealed class RequestContextOptions
 {

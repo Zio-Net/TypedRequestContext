@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Security.Claims;
 
@@ -16,19 +17,25 @@ internal sealed class PropertyMapper
         Header
     }
 
-    private readonly PropertyInfo _property;
+    private readonly string _propertyName;
+    private readonly Type _propertyType;
     private readonly Func<HttpContext, string?> _extract;
+    private readonly Action<object, object?> _setter;
     private readonly bool _required;
     private readonly ContextValueSource _source;
 
     private PropertyMapper(
-        PropertyInfo property,
+        string propertyName,
+        Type propertyType,
         Func<HttpContext, string?> extract,
+        Action<object, object?> setter,
         bool required,
         ContextValueSource source)
     {
-        _property = property;
+        _propertyName = propertyName;
+        _propertyType = propertyType;
         _extract = extract;
+        _setter = setter;
         _required = required;
         _source = source;
     }
@@ -60,8 +67,9 @@ internal sealed class PropertyMapper
                 : null;
 
         var source = fromClaim is not null ? ContextValueSource.Claim : ContextValueSource.Header;
+        var setter = BuildSetter(property);
 
-        return new PropertyMapper(property, extract, required, source);
+        return new PropertyMapper(property.Name, property.PropertyType, extract, setter, required, source);
     }
 
     /// <summary>
@@ -79,28 +87,53 @@ internal sealed class PropertyMapper
             if (_required)
             {
                 return _source == ContextValueSource.Claim
-                    ? PropertyMapperResult.MissingClaim(_property.Name)
-                    : PropertyMapperResult.MissingHeader(_property.Name);
+                    ? PropertyMapperResult.MissingClaim(_propertyName)
+                    : PropertyMapperResult.MissingHeader(_propertyName);
             }
 
             return PropertyMapperResult.Success;
         }
 
-        var converted = ConvertValue(raw, _property.PropertyType);
+        var converted = ConvertValue(raw, _propertyType);
         if (converted is null)
         {
             if (_required)
             {
                 return _source == ContextValueSource.Claim
-                    ? PropertyMapperResult.InvalidClaim(_property.Name)
-                    : PropertyMapperResult.InvalidHeader(_property.Name);
+                    ? PropertyMapperResult.InvalidClaim(_propertyName)
+                    : PropertyMapperResult.InvalidHeader(_propertyName);
             }
 
             return PropertyMapperResult.Success;
         }
 
-        _property.SetValue(instance, converted);
+        _setter(instance, converted);
         return PropertyMapperResult.Success;
+    }
+
+    /// <summary>
+    /// Builds a compiled setter delegate for the given property.
+    /// Falls back to reflection-based SetValue for init-only properties
+    /// where the set method cannot be compiled into a delegate.
+    /// </summary>
+    internal static Action<object, object?> BuildSetter(PropertyInfo property)
+    {
+        try
+        {
+            var instanceParam = Expression.Parameter(typeof(object), "instance");
+            var valueParam = Expression.Parameter(typeof(object), "value");
+
+            var castInstance = Expression.Convert(instanceParam, property.DeclaringType!);
+            var castValue = Expression.Convert(valueParam, property.PropertyType);
+            var propertyAccess = Expression.Property(castInstance, property);
+            var assign = Expression.Assign(propertyAccess, castValue);
+
+            return Expression.Lambda<Action<object, object?>>(assign, instanceParam, valueParam).Compile();
+        }
+        catch (InvalidOperationException)
+        {
+            return property.SetValue;
+        }
     }
 
     internal static object? ConvertValue(string raw, Type targetType)
@@ -145,22 +178,22 @@ internal readonly record struct PropertyMapperResult
     public static PropertyMapperResult MissingClaim(string propertyName)
         => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Missing };
 
-    /// <summary>A required header was missing — should return 403.</summary>
+    /// <summary>A required header was missing — should return 400.</summary>
     public static PropertyMapperResult MissingHeader(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Missing };
+        => new() { IsSuccess = false, StatusCode = 400, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Missing };
 
     /// <summary>A required claim exists but has invalid format — should return 401.</summary>
     public static PropertyMapperResult InvalidClaim(string propertyName)
         => new() { IsSuccess = false, StatusCode = 401, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Invalid };
 
-    /// <summary>A required header exists but has invalid format — should return 403.</summary>
+    /// <summary>A required header exists but has invalid format — should return 400.</summary>
     public static PropertyMapperResult InvalidHeader(string propertyName)
-        => new() { IsSuccess = false, StatusCode = 403, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Invalid };
+        => new() { IsSuccess = false, StatusCode = 400, PropertyName = propertyName, FailureKind = RequestContextFailureKind.Invalid };
 
     /// <summary>Whether the extraction succeeded.</summary>
     public bool IsSuccess { get; init; }
 
-    /// <summary>HTTP status code to return on failure (401 or 403).</summary>
+    /// <summary>HTTP status code to return on failure (401 or 400).</summary>
     public int StatusCode { get; init; }
 
     /// <summary>The name of the property that failed extraction.</summary>

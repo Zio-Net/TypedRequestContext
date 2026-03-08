@@ -1,4 +1,5 @@
 using System.Reflection;
+using TypedRequestContext.Infrastructure;
 
 namespace TypedRequestContext.Propagation.Infrastructure;
 
@@ -45,17 +46,23 @@ public sealed class AttributeBasedRequestContextDeserializer<T> : IRequestContex
 
     private sealed class PropagationKeyMapper
     {
-        private readonly PropertyInfo _property;
+        private readonly string _propertyName;
+        private readonly Type _propertyType;
         private readonly string _key;
+        private readonly Action<object, object?> _setter;
         private readonly bool _required;
 
         private PropagationKeyMapper(
-            PropertyInfo property,
+            string propertyName,
+            Type propertyType,
             string key,
+            Action<object, object?> setter,
             bool required)
         {
-            _property = property;
+            _propertyName = propertyName;
+            _propertyType = propertyType;
             _key = key;
+            _setter = setter;
             _required = required;
         }
 
@@ -66,7 +73,8 @@ public sealed class AttributeBasedRequestContextDeserializer<T> : IRequestContex
                 return null;
 
             var required = property.GetCustomAttribute<RequiredContextValueAttribute>() is not null;
-            return new PropagationKeyMapper(property, propagationKey.Key, required);
+            var setter = PropertyMapper.BuildSetter(property);
+            return new PropagationKeyMapper(property.Name, property.PropertyType, propagationKey.Key, setter, required);
         }
 
         public void Apply(object instance, IReadOnlyDictionary<string, string> metadata)
@@ -78,54 +86,25 @@ public sealed class AttributeBasedRequestContextDeserializer<T> : IRequestContex
                 if (_required)
                 {
                     throw new RequestContextDeserializationException(
-                        $"Required context value '{_property.Name}' is missing in metadata key '{_key}'.");
+                        $"Required context value '{_propertyName}' is missing in metadata key '{_key}'.");
                 }
 
                 return;
             }
 
-            var converted = ConvertValue(raw, _property.PropertyType);
+            var converted = PropertyMapper.ConvertValue(raw, _propertyType);
             if (converted is null)
             {
                 if (_required)
                 {
                     throw new RequestContextDeserializationException(
-                        $"Context value for '{_property.Name}' from metadata key '{_key}' is invalid.");
+                        $"Context value for '{_propertyName}' from metadata key '{_key}' is invalid.");
                 }
 
                 return;
             }
 
-            _property.SetValue(instance, converted);
-        }
-
-        private static object? ConvertValue(string raw, Type targetType)
-        {
-            var underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
-
-            if (underlying == typeof(string))
-                return raw;
-
-            if (underlying == typeof(Guid))
-                return Guid.TryParse(raw, out var guid) ? guid : null;
-
-            if (underlying.IsEnum)
-                return Enum.TryParse(underlying, raw, ignoreCase: true, out var enumVal) ? enumVal : null;
-
-            var converter = System.ComponentModel.TypeDescriptor.GetConverter(underlying);
-            if (converter.CanConvertFrom(typeof(string)))
-            {
-                try
-                {
-                    return converter.ConvertFromInvariantString(raw);
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-
-            return null;
+            _setter(instance, converted);
         }
     }
 }

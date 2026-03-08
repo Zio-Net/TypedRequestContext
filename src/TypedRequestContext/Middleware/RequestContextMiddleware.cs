@@ -22,19 +22,13 @@ public sealed class RequestContextMiddleware(
     RequestContextScopeFactory scopeFactory,
     ILogger<RequestContextMiddleware> logger)
 {
-    private readonly RequestDelegate _next = next;
-    private readonly Dictionary<Type, Func<HttpContext, ITypedRequestContext>> _extractors = extractors;
-    private readonly bool _correlationEnabled = correlationEnabled;
-    private readonly RequestContextScopeFactory _scopeFactory = scopeFactory;
-    private readonly ILogger<RequestContextMiddleware> _logger = logger;
-
     /// <summary>
     /// Processes the HTTP request: (1) correlation ID handling, (2) typed context extraction.
     /// </summary>
     public async Task InvokeAsync(HttpContext httpContext)
     {
         // Step 1: Unconditional CorrelationId handling (when enabled via AddCorrelationId())
-        if (_correlationEnabled)
+        if (correlationEnabled)
         {
             var correlationId =
                 httpContext.Request.Headers["x-correlation-id"].FirstOrDefault()
@@ -54,17 +48,17 @@ public sealed class RequestContextMiddleware(
 
         if (descriptor is null)
         {
-            await _next(httpContext);
+            await next(httpContext);
             return;
         }
 
         try
         {
-            if (!_extractors.TryGetValue(descriptor.ContextType, out var extract))
+            if (!extractors.TryGetValue(descriptor.ContextType, out var extract))
             {
                 throw new InvalidOperationException(
                     $"No extractor registered for context type '{descriptor.ContextType.Name}'. " +
-                    $"Ensure AddRequestContext<{descriptor.ContextType.Name}>() was called during service registration.");
+                    $"Ensure AddTypedRequestContext<{descriptor.ContextType.Name}>() was called during service registration.");
             }
 
             // Invoke the pre-built extractor delegate to create the typed context
@@ -72,41 +66,55 @@ public sealed class RequestContextMiddleware(
 
             // Store in typed accessor via scope — automatically cleared on dispose.
             // Pass request-scoped provider so validators can use scoped dependencies.
-            using var scope = _scopeFactory.Begin(requestContext, httpContext.RequestServices);
+            using var scope = scopeFactory.Begin(requestContext, httpContext.RequestServices);
 
-            _logger.LogDebug(
+            logger.LogDebug(
                 "Request context set: Type={ContextType}",
                 descriptor.ContextType.Name);
 
-            await _next(httpContext);
+            await next(httpContext);
         }
         catch (RequestContextValidationException ex)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Request context validation failed: {ErrorCount} error(s)",
                 ex.Errors.Count);
 
-            httpContext.Response.StatusCode = 400;
-            await httpContext.Response.WriteAsJsonAsync(new
+            if (!httpContext.Response.HasStarted)
             {
-                message = ex.Message,
-                errors = ex.Errors
-                    .GroupBy(e => e.MemberName ?? "$")
-                    .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray())
-            });
+                httpContext.Response.StatusCode = 400;
+                await httpContext.Response.WriteAsJsonAsync(new
+                {
+                    message = ex.Message,
+                    errors = ex.Errors
+                        .GroupBy(e => e.MemberName ?? "$")
+                        .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray())
+                });
+            }
+            else
+            {
+                logger.LogError(ex, "Response already started; cannot write validation error body.");
+            }
         }
         catch (RequestContextCreationException ex)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 "Request context creation failed: {Message}",
                 ex.Message);
 
-            httpContext.Response.StatusCode = ex.StatusCode;
-            await httpContext.Response.WriteAsJsonAsync(new { message = ex.Message, });
+            if (!httpContext.Response.HasStarted)
+            {
+                httpContext.Response.StatusCode = ex.StatusCode;
+                await httpContext.Response.WriteAsJsonAsync(new { message = ex.Message });
+            }
+            else
+            {
+                logger.LogError(ex, "Response already started; cannot write creation error body.");
+            }
         }
         finally
         {
-            if (_correlationEnabled)
+            if (correlationEnabled)
                 CorrelationContext.Clear();
         }
     }

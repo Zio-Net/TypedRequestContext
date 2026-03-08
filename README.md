@@ -2,12 +2,12 @@
 
 Typed request context middleware for ASP.NET Core.
 
-Define *per-endpoint* (or per-route-group) strongly-typed “request context” objects, extract them from claims/headers, and access them anywhere in the request pipeline via an `AsyncLocal` accessor.
+Define *per-endpoint* (or per-route-group) strongly-typed "request context" objects, extract them from claims/headers, validate them, and access them anywhere in the request pipeline via an `AsyncLocal` accessor — including non-HTTP flows like queues and background jobs.
 
 This repo produces two NuGet packages:
 
-- **`TypedRequestContext`** — core middleware, attributes, accessor, correlation ID
-- **`TypedRequestContext.Propagation`** — optional propagation (serialize/deserialize + header provider)
+- **`TypedRequestContext`** — core middleware, attributes, accessor, validation, correlation ID
+- **`TypedRequestContext.Propagation`** — optional propagation (serialize/deserialize, header provider, non-HTTP context restoration)
 
 ---
 
@@ -15,14 +15,12 @@ This repo produces two NuGet packages:
 
 In many services you end up needing the same business identifiers everywhere (tenant, user, role, operation id, etc.). Passing them manually through every method is noisy, and extracting them ad-hoc in each endpoint is easy to get wrong.
 
-`TypedRequestContext` gives you:
+`TypedRequestContext` solves this by letting you:
 
-- A **typed model** for the “ambient” request context (per endpoint/group)
-- **One extraction pipeline** (claims/headers) with clear “required vs optional” semantics
-- **Multiple context shapes in the same service** — register many context types and choose per endpoint / route group
-- **Ambient access** for deep services (inject the context type directly *or* use `IRequestContextAccessor`)
-- Optional **propagation across services and async boundaries** (HTTP headers, queue/event metadata)
-- **Correlation ID propagation** via `x-correlation-id` when the propagation package is enabled
+- **Define once, use everywhere** — declare a typed model for your request context and access it from any layer without manual plumbing
+- **Fail fast on bad input** — required values are enforced at the edge; validation errors return structured responses before your handler runs
+- **Support multiple context shapes** — different endpoints can require different context types in the same service
+- **Propagate context across boundaries** — carry tenant, user, and correlation data to downstream HTTP calls, queues, and background jobs without ad-hoc serialization
 
 ---
 
@@ -147,7 +145,7 @@ static IResult GetOrders([FromServices] CustomerRequestContext ctx)
 
 In deeper services you have two options:
 
-1) Inject the typed context directly (it’s registered as scoped when you call `AddTypedRequestContext<T>()`):
+1) Inject the typed context directly (it's registered as scoped when you call `AddTypedRequestContext<T>()`):
 
 ```csharp
 public sealed class BillingService(CustomerRequestContext ctx)
@@ -156,7 +154,7 @@ public sealed class BillingService(CustomerRequestContext ctx)
 }
 ```
 
-2) Use `IRequestContextAccessor` when you need a looser coupling (e.g., interface-based access, optional access, libraries that shouldn’t depend on a specific context type):
+2) Use `IRequestContextAccessor` when you need a looser coupling (e.g., interface-based access, optional access, libraries that shouldn't depend on a specific context type):
 
 ```csharp
 using TypedRequestContext;
@@ -179,6 +177,7 @@ public sealed class AuditService(IRequestContextAccessor accessor)
 - You attach the desired context type to endpoints/groups via `WithRequestContext<TContext>()`.
 - For requests hitting such endpoints, the middleware:
   - Creates the context via an extractor (`IRequestContextExtractor<TContext>`)
+  - Validates it (if validation is enabled)
   - Stores it into `IRequestContextAccessor.Current` for the request lifetime
 
 The default extractor uses cached reflection and the attributes on your context properties.
@@ -188,12 +187,104 @@ The default extractor uses cached reflection and the attributes on your context 
 If a `[RequiredContextValue]` property is missing:
 
 - For **claims**: the middleware returns **401**
-- For **headers**: the middleware returns **403**
+- For **headers**: the middleware returns **400**
 
 The response body is JSON:
 
 ```json
 { "message": "Required context value 'TenantId' is missing." }
+```
+
+---
+
+## Validation
+
+Enable validation per context type during registration:
+
+```csharp
+builder.Services.AddTypedRequestContext<CustomerRequestContext>(b =>
+    b.EnableValidation());
+```
+
+By default, `EnableValidation()` uses **DataAnnotations** (`System.ComponentModel.DataAnnotations`). You can use any standard validation attributes:
+
+```csharp
+using System.ComponentModel.DataAnnotations;
+using TypedRequestContext;
+
+public sealed class OrderContext : ITypedRequestContext
+{
+    [FromHeader("x-order-code"), MaxLength(4)]
+    public string? Code { get; init; }
+
+    [FromHeader("x-quantity"), Range(1, 1000)]
+    public int Quantity { get; init; }
+
+    [FromClaim("email"), RegularExpression(@"^[^@]+@[^@]+\.[^@]+$")]
+    public string? Email { get; init; }
+}
+```
+
+The context type can also implement `IValidatableObject` for cross-property validation:
+
+```csharp
+public sealed class OrderContext : ITypedRequestContext, IValidatableObject
+{
+    [FromHeader("x-min"), RequiredContextValue]
+    public int Min { get; init; }
+
+    [FromHeader("x-max"), RequiredContextValue]
+    public int Max { get; init; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Min > Max)
+            yield return new ValidationResult("Min must be <= Max", [nameof(Min), nameof(Max)]);
+    }
+}
+```
+
+### Validation error response
+
+When validation fails, the middleware returns **400** with a structured body grouping errors by property:
+
+```json
+{
+  "message": "Request context validation failed.",
+  "errors": {
+    "Code": ["The field Code must be a string with a maximum length of 4."],
+    "Quantity": ["The field Quantity must be between 1 and 1000."],
+    "$": ["Object-level validation error message"]
+  }
+}
+```
+
+### Custom validators
+
+For validation logic beyond DataAnnotations, implement `IRequestContextValidator<T>`:
+
+```csharp
+using TypedRequestContext;
+
+public sealed class OrderContextValidator : IRequestContextValidator<OrderContext>
+{
+    public IReadOnlyList<RequestContextValidationError> Validate(OrderContext context)
+    {
+        var errors = new List<RequestContextValidationError>();
+
+        if (context.Code is not null && !IsValidCode(context.Code))
+            errors.Add(new RequestContextValidationError(nameof(context.Code), "Invalid order code format."));
+
+        return errors;
+    }
+}
+```
+
+Register it:
+
+```csharp
+builder.Services.AddTypedRequestContext<OrderContext>(b =>
+    b.UseValidation<OrderContextValidator>());
 ```
 
 ---
@@ -296,52 +387,63 @@ public sealed class DownstreamClient(
 
 Because `GetCurrentHeaders()` includes `x-correlation-id` (when correlation is enabled), a downstream ASP.NET Core service using `AddCorrelationId()` will automatically pick it up on inbound requests.
 
-### Non-HTTP: deserialize from metadata
+### Non-HTTP flows: queues, events, background jobs
 
-For queues/events/background jobs, you can serialize and carry the same headers dictionary as message metadata.
+For non-HTTP consumers, `IRequestContextPropagator<T>` handles deserialization, validation, and context lifecycle in a single call.
 
-Producer side (create metadata):
+**Producer side** — serialize current context into message metadata:
 
 ```csharp
 using TypedRequestContext.Propagation;
 
-public sealed class Producer(IPropagationHeadersProvider headers)
+public sealed class OrderProducer(IPropagationHeadersProvider headers)
 {
-    public IReadOnlyDictionary<string, string> CreateMetadata()
-        => headers.GetCurrentHeaders();
+    public void Publish(Order order)
+    {
+        var metadata = headers.GetCurrentHeaders();
+        // Attach metadata as message headers / properties
+        messageBus.Publish(order, metadata);
+    }
 }
 ```
 
-Consumer side (restore context):
+**Consumer side** — restore context from metadata:
 
 ```csharp
 using TypedRequestContext;
 using TypedRequestContext.Propagation;
 
-public sealed class Handler(
-    IRequestContextDeserializer<CustomerRequestContext> deserializer,
+public sealed class OrderHandler(
+    IRequestContextPropagator<CustomerRequestContext> propagator,
     IRequestContextAccessor accessor)
 {
-    public async Task HandleAsync(IReadOnlyDictionary<string, string> metadata, CancellationToken ct)
+    public async Task HandleAsync(
+        IReadOnlyDictionary<string, string> metadata,
+        CancellationToken ct)
     {
-        var ctx = deserializer.Deserialize(metadata);
+        using var _ = propagator.Propagate(metadata);
 
-        accessor.Current = ctx;
-        try
-        {
-            // Your handler/service code can now inject CustomerRequestContext
-            // or use IRequestContextAccessor.GetRequired<CustomerRequestContext>().
-            await Task.CompletedTask;
-        }
-        finally
-        {
-            accessor.Current = null;
-        }
+        // Context is now set — use it via DI or accessor
+        var ctx = accessor.GetRequired<CustomerRequestContext>();
+        await ProcessOrderAsync(ctx.TenantId, ctx.UserId, ct);
+
+        // Context is automatically cleared when the scope is disposed
     }
 }
 ```
 
-The same metadata can include `x-correlation-id` (from `GetCurrentHeaders()`). How you apply correlation in a non-HTTP consumer depends on your hosting model and logging setup.
+`Propagate()` will:
+1. Deserialize the metadata into the typed context using `IRequestContextDeserializer<T>`
+2. Validate the context (if validation is enabled for this type)
+3. Set it on `IRequestContextAccessor`
+4. Return a disposable scope that clears the context on disposal
+
+If validation is enabled and the validator has scoped dependencies, pass a scoped `IServiceProvider`:
+
+```csharp
+using var scope = serviceProvider.CreateScope();
+using var _ = propagator.Propagate(metadata, scope.ServiceProvider);
+```
 
 ---
 
@@ -383,11 +485,29 @@ builder.Services.AddTypedRequestContext<MyContext>(b =>
      .UseDeserializer<MyDeserializer>());
 ```
 
+Serializer interface:
+
+```csharp
+public interface IRequestContextSerializer<in T> where T : class, ITypedRequestContext
+{
+    IReadOnlyDictionary<string, string> Serialize(T context);
+}
+```
+
+Deserializer interface:
+
+```csharp
+public interface IRequestContextDeserializer<out T> where T : class, ITypedRequestContext
+{
+    T Deserialize(IReadOnlyDictionary<string, string> metadata);
+}
+```
+
 ---
 
 ## Troubleshooting
 
-- **My handler can’t resolve `CustomerRequestContext` from DI**
+- **My handler can't resolve `CustomerRequestContext` from DI**
   - Ensure `AddTypedRequestContext<CustomerRequestContext>()` was called.
   - Ensure the endpoint/group has `.WithRequestContext<CustomerRequestContext>()`.
 
@@ -395,7 +515,13 @@ builder.Services.AddTypedRequestContext<MyContext>(b =>
   - Ensure `app.UseTypedRequestContext()` runs **after** auth middleware.
 
 - **I get `No extractor registered for context type ...`**
-  - You attached `.WithRequestContext<T>()` but didn’t register `AddTypedRequestContext<T>()`.
+  - You attached `.WithRequestContext<T>()` but didn't register `AddTypedRequestContext<T>()`.
+
+- **Validation errors return 400 but I expected a different status**
+  - Validation failures always return 400. For missing required values (pre-validation), claims return 401 and headers return 400.
+
+- **Non-HTTP consumer throws `RequestContextDeserializationException`**
+  - A required metadata key is missing or has an invalid format. Check that the producer serialized all `[PropagationKey]` properties.
 
 
 ## Contributing
