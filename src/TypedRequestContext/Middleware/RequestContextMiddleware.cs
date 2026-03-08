@@ -93,7 +93,7 @@ public sealed class RequestContextMiddleware(
             }
             else
             {
-                logger.LogWarning("Response already started; cannot write validation error body.");
+                logger.LogError(ex, "Response already started; cannot write validation error body.");
             }
         }
         catch (RequestContextCreationException ex)
@@ -109,7 +109,7 @@ public sealed class RequestContextMiddleware(
             }
             else
             {
-                logger.LogWarning("Response already started; cannot write creation error body.");
+                logger.LogError(ex, "Response already started; cannot write creation error body.");
             }
         }
         finally

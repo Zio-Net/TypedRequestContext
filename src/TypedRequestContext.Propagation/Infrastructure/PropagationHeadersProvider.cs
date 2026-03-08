@@ -13,12 +13,13 @@ namespace TypedRequestContext.Propagation.Infrastructure;
 internal sealed class PropagationHeadersProvider(
     IRequestContextAccessor contextAccessor,
     IOptions<RequestContextOptions> options,
+    IServiceProvider rootProvider,
     IServiceScopeFactory scopeFactory,
     ICorrelationContext? correlationContext = null) : IPropagationHeadersProvider
 {
     private readonly Lazy<Dictionary<Type, SerializerRegistration>> _serializerRegistrations = new(
             () => BuildSerializerMap(options.Value));
-    private readonly ConcurrentDictionary<Type, object> _singletonSerializerCache = new();
+    private readonly ConcurrentDictionary<Type, Lazy<object>> _singletonSerializerCache = new();
     private static readonly ConcurrentDictionary<Type, Func<object, ITypedRequestContext, IReadOnlyDictionary<string, string>>> _invokerCache = new();
 
     /// <inheritdoc />
@@ -46,11 +47,11 @@ internal sealed class PropagationHeadersProvider(
     {
         if (registration.IsSingleton)
         {
-            return _singletonSerializerCache.GetOrAdd(contextType, _ =>
-            {
-                using var scope = scopeFactory.CreateScope();
-                return registration.Resolve(scope.ServiceProvider);
-            });
+            var lazy = _singletonSerializerCache.GetOrAdd(contextType,
+                _ => new Lazy<object>(
+                    () => registration.Resolve(rootProvider),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+            return lazy.Value;
         }
 
         // Custom serializers may have scoped dependencies — create a scope each time

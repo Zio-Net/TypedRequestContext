@@ -130,7 +130,7 @@ internal sealed class PropertyMapper
 
             return Expression.Lambda<Action<object, object?>>(assign, instanceParam, valueParam).Compile();
         }
-        catch
+        catch (InvalidOperationException)
         {
             return property.SetValue;
         }
