@@ -33,17 +33,17 @@ internal sealed class PropagationHeadersProvider(
         var context = contextAccessor.Current;
         if (context is not null && _serializerRegistrations.Value.TryGetValue(context.GetType(), out var registration))
         {
-            var serializer = ResolveSerializer(context.GetType(), registration);
+            using var scope = ResolveSerializer(context.GetType(), registration);
             var serialize = _invokerCache.GetOrAdd(context.GetType(), CreateInvoker);
 
-            foreach (var (key, value) in serialize(serializer, context))
+            foreach (var (key, value) in serialize(scope.Serializer, context))
                 headers[key] = value;
         }
 
         return headers;
     }
 
-    private object ResolveSerializer(Type contextType, SerializerRegistration registration)
+    private SerializerScope ResolveSerializer(Type contextType, SerializerRegistration registration)
     {
         if (registration.IsSingleton)
         {
@@ -51,12 +51,18 @@ internal sealed class PropagationHeadersProvider(
                 _ => new Lazy<object>(
                     () => registration.Resolve(rootProvider),
                     LazyThreadSafetyMode.ExecutionAndPublication));
-            return lazy.Value;
+            return new SerializerScope(lazy.Value, scope: null);
         }
 
-        // Custom serializers may have scoped dependencies — create a scope each time
-        using var scopeForCustom = scopeFactory.CreateScope();
-        return registration.Resolve(scopeForCustom.ServiceProvider);
+        // Custom serializers may have scoped dependencies — keep scope alive for serialization
+        var scope = scopeFactory.CreateScope();
+        return new SerializerScope(registration.Resolve(scope.ServiceProvider), scope);
+    }
+
+    private readonly struct SerializerScope(object serializer, IServiceScope? scope) : IDisposable
+    {
+        public object Serializer { get; } = serializer;
+        public void Dispose() => scope?.Dispose();
     }
 
     private static Dictionary<Type, SerializerRegistration> BuildSerializerMap(
